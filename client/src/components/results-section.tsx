@@ -24,12 +24,12 @@ export default function ResultsSection({ document, onStartOver }: ResultsSection
       
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const a = window.document.createElement('a');
       a.href = url;
       a.download = `${type}_${document.filename}`;
-      document.body.appendChild(a);
+      window.document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
+      window.document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
       
       toast({

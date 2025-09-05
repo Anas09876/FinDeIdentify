@@ -44,8 +44,9 @@ export function useDocumentProcessor() {
       return response.json() as Promise<Document>;
     },
     enabled: !!currentDocument?.id && currentDocument.processingStatus !== 'complete',
-    refetchInterval: (data) => {
+    refetchInterval: (query) => {
       // Stop polling when complete or error
+      const data = query.state.data;
       if (data?.processingStatus === 'complete' || data?.processingStatus === 'error') {
         return false;
       }

@@ -25,6 +25,9 @@ export class MemStorage implements IStorage {
       id,
       createdAt: now,
       updatedAt: now,
+      redactedPath: insertDoc.redactedPath || null,
+      processingStatus: insertDoc.processingStatus || 'pending',
+      detectedSensitiveData: insertDoc.detectedSensitiveData || null,
     };
     this.documents.set(id, doc);
     return doc;
