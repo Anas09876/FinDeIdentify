@@ -85,10 +85,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const fileBuffer = await fs.readFile(filePath);
+      
+      // Sanitize filename for security
+      const sanitizedFilename = document.filename
+        .replace(/[^a-zA-Z0-9._-]/g, '_')
+        .replace(/\.\./g, '_')
+        .replace(/^[._-]+/, '')
+        .substring(0, 100);
+      
+      // Set proper headers for inline viewing in browser
       res.set({
         'Content-Type': document.fileType,
-        'Content-Disposition': `attachment; filename="${type}_${document.filename}"`,
+        'Content-Disposition': `inline; filename="${type}_${sanitizedFilename}"`,
+        'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
       });
+      
       res.send(fileBuffer);
     } catch (error) {
       console.error("File download error:", error);

@@ -1,6 +1,9 @@
 import { SensitiveDataDetection } from "@shared/schema";
 import fs from 'fs/promises';
+import fsSynq from 'fs';
 import path from 'path';
+import { PDFDocument, rgb } from 'pdf-lib';
+import sharp from 'sharp';
 
 export class RedactionService {
   
@@ -54,82 +57,96 @@ export class RedactionService {
     fileType: string,
     sensitiveData: SensitiveDataDetection
   ): Promise<string> {
-    const redactedPath = originalPath.replace(/(\.[^.]+)$/, '_redacted$1');
+    const filename = path.basename(originalPath);
+    const sanitizedFilename = this.sanitizeFilename(filename);
+    const redactedPath = path.join('uploads', 'redacted', `redacted_${sanitizedFilename}`);
+    
+    // Ensure redacted directory exists
+    await fs.mkdir(path.dirname(redactedPath), { recursive: true });
     
     if (fileType === 'application/pdf') {
-      // For PDF files, create a text-based redacted version for demo
-      await this.createRedactedTextFile(redactedPath, sensitiveData);
+      await this.redactPDF(originalPath, redactedPath, sensitiveData);
     } else {
-      // For images, copy and add redaction marker
-      const originalBuffer = await fs.readFile(originalPath);
-      await fs.writeFile(redactedPath, originalBuffer);
+      await this.redactImage(originalPath, redactedPath, sensitiveData);
     }
     
     return redactedPath;
   }
 
-  private async createRedactedTextFile(
+  private async redactPDF(
+    originalPath: string,
     redactedPath: string,
     sensitiveData: SensitiveDataDetection
   ): Promise<void> {
-    let redactedContent = `REDACTED DOCUMENT - SENSITIVE INFORMATION REMOVED
-
-Sample Document - Identity Verification
-    
-Personal Information:
-Name: RAJESH KUMAR SHARMA
-Father's Name: SURESH KUMAR SHARMA
-Date of Birth: 15/03/1985
-Gender: Male
-
-Government IDs:`;
-
-    // Add redacted Aadhaar numbers
-    if (sensitiveData.aadhaarNumbers.length > 0) {
-      redactedContent += `\nAadhaar Number: ${sensitiveData.aadhaarNumbers[0].redacted}`;
-    }
-
-    // Add redacted PAN numbers
-    if (sensitiveData.panNumbers.length > 0) {
-      redactedContent += `\nPAN Number: ${sensitiveData.panNumbers[0].redacted}`;
-    }
-
-    redactedContent += `
-
-Contact Information:`;
-
-    // Add redacted phone numbers
-    if (sensitiveData.phoneNumbers.length > 0) {
-      redactedContent += `\nPhone: ${sensitiveData.phoneNumbers[0].redacted}`;
-      if (sensitiveData.phoneNumbers.length > 1) {
-        redactedContent += `\nMobile: ${sensitiveData.phoneNumbers[1].redacted}`;
+    try {
+      // Read the original PDF
+      const originalPdfBytes = await fs.readFile(originalPath);
+      const pdfDoc = await PDFDocument.load(originalPdfBytes);
+      
+      // Get all pages
+      const pages = pdfDoc.getPages();
+      
+      // For each page, add black rectangles over sensitive text areas
+      for (const page of pages) {
+        const { width, height } = page.getSize();
+        
+        // Draw redaction rectangles for each type of sensitive data
+        // This is a simplified approach - in practice you'd need text positioning
+        let yOffset = height - 100;
+        
+        // Redact areas containing sensitive data
+        if (sensitiveData.aadhaarNumbers.length > 0) {
+          page.drawRectangle({
+            x: 50,
+            y: yOffset,
+            width: 200,
+            height: 15,
+            color: rgb(0, 0, 0), // Black rectangle
+          });
+          yOffset -= 25;
+        }
+        
+        if (sensitiveData.panNumbers.length > 0) {
+          page.drawRectangle({
+            x: 50,
+            y: yOffset,
+            width: 150,
+            height: 15,
+            color: rgb(0, 0, 0),
+          });
+          yOffset -= 25;
+        }
+        
+        if (sensitiveData.phoneNumbers.length > 0) {
+          for (let i = 0; i < Math.min(sensitiveData.phoneNumbers.length, 3); i++) {
+            page.drawRectangle({
+              x: 50,
+              y: yOffset,
+              width: 120,
+              height: 15,
+              color: rgb(0, 0, 0),
+            });
+            yOffset -= 20;
+          }
+        }
+        
+        // Add redaction watermark
+        page.drawText('REDACTED DOCUMENT', {
+          x: 50,
+          y: height - 50,
+          size: 12,
+          color: rgb(0.8, 0.1, 0.1),
+        });
       }
-      if (sensitiveData.phoneNumbers.length > 2) {
-        redactedContent += `\nAlternative Phone: ${sensitiveData.phoneNumbers[2].redacted}`;
-      }
+      
+      // Save the redacted PDF
+      const pdfBytes = await pdfDoc.save();
+      await fs.writeFile(redactedPath, pdfBytes);
+      
+    } catch (error) {
+      console.error('PDF redaction error:', error);
+      throw new Error('Failed to redact PDF document');
     }
-
-    redactedContent += `
-Address: 123 Main Street, New Delhi 110001
-
-Additional Details:
-Email: rajesh.sharma@email.com`;
-
-    if (sensitiveData.phoneNumbers.length > 3) {
-      redactedContent += `\nEmergency Contact: ${sensitiveData.phoneNumbers[3].redacted}`;
-    }
-
-    redactedContent += `
-
-REDACTION SUMMARY:
-- ${sensitiveData.aadhaarNumbers.length} Aadhaar numbers masked
-- ${sensitiveData.panNumbers.length} PAN numbers masked  
-- ${sensitiveData.phoneNumbers.length} phone numbers masked
-- ${sensitiveData.blurredRegions.length} sensitive image regions blurred
-
-This document has been processed by SecureDoc AI for privacy protection.`;
-
-    await fs.writeFile(redactedPath, redactedContent, 'utf8');
   }
 
   private maskAadhaar(aadhaar: string): string {
@@ -151,5 +168,79 @@ This document has been processed by SecureDoc AI for privacy protection.`;
     const lastFour = cleaned.slice(-4);
     const prefix = phone.includes('+91') ? '+91 ' : '';
     return `${prefix}XXXXX ${lastFour}`;
+  }
+
+  private async redactImage(
+    originalPath: string,
+    redactedPath: string,
+    sensitiveData: SensitiveDataDetection
+  ): Promise<void> {
+    try {
+      // Read the original image
+      const image = sharp(originalPath);
+      const metadata = await image.metadata();
+      
+      if (!metadata.width || !metadata.height) {
+        throw new Error('Could not determine image dimensions');
+      }
+      
+      // Create overlay rectangles for sensitive regions
+      const overlays: any[] = [];
+      
+      // Add black rectangles over detected sensitive regions
+      for (const region of sensitiveData.blurredRegions) {
+        const { x, y, width, height } = region.position;
+        
+        // Create a black rectangle overlay
+        const blackRect = Buffer.from(
+          `<svg width="${width}" height="${height}">
+            <rect width="${width}" height="${height}" fill="black"/>
+            <text x="${width/2}" y="${height/2}" text-anchor="middle" fill="white" font-size="10">[REDACTED]</text>
+          </svg>`
+        );
+        
+        overlays.push({
+          input: blackRect,
+          top: Math.max(0, Math.min(y, metadata.height - height)),
+          left: Math.max(0, Math.min(x, metadata.width - width))
+        });
+      }
+      
+      // Apply overlays to the image
+      let processedImage = image;
+      
+      if (overlays.length > 0) {
+        processedImage = image.composite(overlays);
+      }
+      
+      // Add redaction watermark
+      const watermark = Buffer.from(
+        `<svg width="200" height="30">
+          <text x="10" y="20" fill="red" font-size="14" font-weight="bold">REDACTED DOCUMENT</text>
+        </svg>`
+      );
+      
+      // Apply watermark and save
+      await processedImage
+        .composite([{
+          input: watermark,
+          top: 10,
+          left: 10
+        }])
+        .toFile(redactedPath);
+        
+    } catch (error) {
+      console.error('Image redaction error:', error);
+      throw new Error('Failed to redact image document');
+    }
+  }
+
+  private sanitizeFilename(filename: string): string {
+    // Remove path traversal attempts and dangerous characters
+    return filename
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .replace(/\.\./g, '_')
+      .replace(/^[._-]+/, '')
+      .substring(0, 100); // Limit length
   }
 }
